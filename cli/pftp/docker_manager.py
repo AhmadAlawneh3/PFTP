@@ -1,0 +1,295 @@
+"""Docker container management for PFTP"""
+
+import click
+import docker
+from docker.errors import DockerException, ImageNotFound, NotFound
+from typing import Dict, Optional
+
+from .config import Config
+from .constants import CONTAINER_NAME
+
+
+class DockerManager:
+    """Manage PFTP Docker container"""
+
+    def __init__(self, config: Config):
+        """Initialize Docker manager
+
+        Args:
+            config: PFTP configuration
+        """
+        self.config = config
+        try:
+            self.client = docker.from_env()
+        except DockerException as e:
+            click.echo(f"Error: Cannot connect to Docker daemon. Is Docker running?", err=True)
+            click.echo(f"Details: {e}", err=True)
+            raise
+
+    def pull_image(self, image_name: str) -> bool:
+        """Pull Docker image from registry
+
+        Args:
+            image_name: Full image name (e.g., 'ahmadalawneh3/pftp:latest')
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            click.echo(f"Pulling image {image_name}...")
+            self.client.images.pull(image_name)
+            click.echo(f"✓ Successfully pulled {image_name}")
+            return True
+        except DockerException as e:
+            click.echo(f"Error pulling image: {e}", err=True)
+            return False
+
+    def is_running(self) -> bool:
+        """Check if container is running
+
+        Returns:
+            True if container exists and is running
+        """
+        try:
+            container = self.client.containers.get(CONTAINER_NAME)
+            return container.status == 'running'
+        except NotFound:
+            return False
+
+    def start_container(self) -> bool:
+        """Start PFTP container
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Check if container exists
+        try:
+            container = self.client.containers.get(CONTAINER_NAME)
+            if container.status == 'running':
+                click.echo(f"Container '{CONTAINER_NAME}' is already running")
+                return True
+            # Container exists but not running - start it
+            container.start()
+            click.echo(f"✓ Started container '{CONTAINER_NAME}'")
+            return True
+        except NotFound:
+            # Create new container
+            return self._create_and_start()
+
+    def _create_and_start(self) -> bool:
+        """Create and start new container
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Prepare volume mappings
+            volumes = {
+                str(self.config.tools_dir): {'bind': '/app/data/tools', 'mode': 'rw'},
+                str(self.config.uploads_dir): {'bind': '/app/data/uploads', 'mode': 'rw'},
+            }
+
+            # Prepare environment variables
+            environment = {
+                # General
+                'PROTOCOL': 'http',
+                'HOST': self.config.host,
+                'PORT': str(self.config.port),
+                'DEBUG': 'false',
+                'UPLOAD_FOLDER': 'data/uploads',
+                'TOOLS_FOLDER': 'data/tools',
+                'IGNORE_DIRS': '.git,__pycache__,.vscode',
+
+                # HTTP
+                'HTTP_ENABLED': str(self.config.protocols.get('http', {}).get('enabled', True)).lower(),
+                'HTTP_PORT': str(self.config.protocols.get('http', {}).get('port', 1234)),
+
+                # FTP
+                'FTP_ENABLED': str(self.config.protocols.get('ftp', {}).get('enabled', True)).lower(),
+                'FTP_PORT': str(self.config.protocols.get('ftp', {}).get('port', 21)),
+                'FTP_PASSIVE_START': str(self.config.protocols.get('ftp', {}).get('passive_start', 60000)),
+                'FTP_PASSIVE_END': str(self.config.protocols.get('ftp', {}).get('passive_end', 60100)),
+
+                # SMB
+                'SMB_ENABLED': str(self.config.protocols.get('smb', {}).get('enabled', True)).lower(),
+                'SMB_PORT': str(self.config.protocols.get('smb', {}).get('port', 445)),
+                'SMB_NETBIOS_PORT': str(self.config.protocols.get('smb', {}).get('netbios_port', 139)),
+
+                # Authentication
+                'AUTH_ENABLED': str(self.config.auth_enabled).lower(),
+                'AUTH_USERNAME': self.config.auth_username or '',
+                'AUTH_PASSWORD_HASH': self.config.auth_password_hash or '',
+            }
+
+            # Prepare restart policy
+            restart_policy_name = self.config.restart_policy or 'unless-stopped'
+            restart_policy = {'Name': restart_policy_name}
+            if restart_policy_name == 'on-failure':
+                restart_policy['MaximumRetryCount'] = 5
+
+            # Create and start container
+            container = self.client.containers.run(
+                self.config.docker_image,
+                name=CONTAINER_NAME,
+                volumes=volumes,
+                environment=environment,
+                network_mode='host',  # Required for IP detection
+                restart_policy=restart_policy,
+                detach=True,
+                stdin_open=True,
+                tty=True
+            )
+
+            click.echo(click.style(f"✓ Container created and started: {container.short_id}", fg='green'))
+
+            # Try to get actual IPs
+            try:
+                import subprocess
+                import re
+                result = subprocess.run(['ip', 'addr', 'show'],
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    ips = []
+                    current_interface = None
+
+                    for line in result.stdout.split('\n'):
+                        if_match = re.match(r'^\d+:\s+(\S+):', line)
+                        if if_match:
+                            current_interface = if_match.group(1)
+
+                        ip_match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', line)
+                        if ip_match and current_interface:
+                            ip = ip_match.group(1)
+                            if ip != '127.0.0.1':
+                                # Priority system:
+                                # 0 = tun interfaces (VPN/pentest)
+                                # 1 = eth interfaces (ethernet)
+                                # 2 = wlan interfaces (wifi)
+                                # 3 = other interfaces
+                                if current_interface.startswith('tun'):
+                                    priority = 0
+                                elif current_interface.startswith('eth'):
+                                    priority = 1
+                                elif current_interface.startswith('wlan'):
+                                    priority = 2
+                                else:
+                                    priority = 3
+
+                                ips.append((priority, ip, current_interface))
+
+                    ips.sort()
+                    ip_list = [ip for _, ip, _ in ips]
+
+                    if ip_list:
+                        click.echo(click.style(f"✓ Server running at:", fg='green', bold=True))
+                        for ip in ip_list:
+                            click.echo(f"  {click.style(f'http://{ip}:{self.config.port}', fg='cyan', bold=True)}")
+                    else:
+                        click.echo(click.style(f"✓ Server running on http://<your-ip>:{self.config.port}", fg='green'))
+                else:
+                    click.echo(click.style(f"✓ Server running on http://<your-ip>:{self.config.port}", fg='green'))
+            except:
+                click.echo(click.style(f"✓ Server running on http://<your-ip>:{self.config.port}", fg='green'))
+
+            return True
+
+        except ImageNotFound:
+            click.echo(f"Error: Docker image '{self.config.docker_image}' not found", err=True)
+            click.echo("Run 'pftp install' to pull the image", err=True)
+            return False
+        except DockerException as e:
+            click.echo(f"Error starting container: {e}", err=True)
+            return False
+
+    def stop_container(self) -> bool:
+        """Stop container
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            container = self.client.containers.get(CONTAINER_NAME)
+            container.stop(timeout=10)
+            click.echo(f"✓ Container '{CONTAINER_NAME}' stopped")
+            return True
+        except NotFound:
+            click.echo(f"Container '{CONTAINER_NAME}' not found")
+            return False
+        except DockerException as e:
+            click.echo(f"Error stopping container: {e}", err=True)
+            return False
+
+    def remove_container(self) -> bool:
+        """Remove container
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            container = self.client.containers.get(CONTAINER_NAME)
+            container.remove(force=True)
+            click.echo(f"✓ Container '{CONTAINER_NAME}' removed")
+            return True
+        except NotFound:
+            # Already removed
+            return True
+        except DockerException as e:
+            click.echo(f"Error removing container: {e}", err=True)
+            return False
+
+    def get_logs(self, follow: bool = True, lines: int = 50):
+        """Get container logs
+
+        Args:
+            follow: Stream logs (like tail -f)
+            lines: Number of lines to show
+        """
+        try:
+            container = self.client.containers.get(CONTAINER_NAME)
+            if follow:
+                click.echo(click.style(f"Following logs from '{CONTAINER_NAME}' (Ctrl+C to stop)...", fg='cyan'))
+                buffer = b''
+                for chunk in container.logs(stream=True, follow=True, tail=lines):
+                    if isinstance(chunk, bytes):
+                        buffer += chunk
+                    else:
+                        buffer += chunk.encode('utf-8')
+                    while b'\n' in buffer:
+                        line, buffer = buffer.split(b'\n', 1)
+                        click.echo(line.decode('utf-8', errors='replace').rstrip())
+                if buffer:
+                    click.echo(buffer.decode('utf-8', errors='replace').rstrip())
+            else:
+                # Get logs as bytes, decode to string
+                logs_bytes = container.logs(tail=lines)
+                if isinstance(logs_bytes, bytes):
+                    click.echo(logs_bytes.decode('utf-8', errors='replace'))
+                else:
+                    click.echo(str(logs_bytes))
+        except NotFound:
+            click.echo(click.style(f"Container '{CONTAINER_NAME}' not found", fg='red'), err=True)
+        except KeyboardInterrupt:
+            click.echo(click.style("\n✓ Stopped following logs", fg='green'))
+        except DockerException as e:
+            click.echo(click.style(f"Error getting logs: {e}", fg='red'), err=True)
+
+    def get_status(self) -> Optional[Dict]:
+        """Get container status information
+
+        Returns:
+            Dictionary with container info or None if not found
+        """
+        try:
+            container = self.client.containers.get(CONTAINER_NAME)
+            return {
+                'status': container.status,
+                'id': container.short_id,
+                'image': container.image.tags[0] if container.image.tags else 'unknown',
+                'created': container.attrs['Created'],
+                'ports': container.attrs.get('NetworkSettings', {}).get('Ports', {})
+            }
+        except NotFound:
+            return {'status': 'not_found'}
+        except DockerException as e:
+            click.echo(f"Error getting status: {e}", err=True)
+            return None

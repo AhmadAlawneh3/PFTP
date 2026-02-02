@@ -1,0 +1,67 @@
+# Git
+.git
+.gitignore
+
+# Claude
+.claude/
+
+# IDE
+.vscode/
+.idea/
+.vs/
+.project
+.settings
+.toolstarget
+*.swp
+*.swo
+**/*.*proj.user
+**/*.dbmdl
+**/*.jfm
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env
+*.egg-info/
+dist/
+build/
+bin/
+obj/
+
+# CLI tool (not needed in container)
+cli/
+
+# Temp files
+*.tmp
+tmp*/
+nul
+node_modules/
+npm-debug.log
+
+# Documentation
+*.md
+!requirements.txt
+LICENSE
+
+# Docker/Compose
+Dockerfile*
+docker-compose*
+compose*
+.dockerignore
+charts/
+secrets.dev.yaml
+values.dev.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads and tools (mounted as volumes)
+uploads/
+tools/

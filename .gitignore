@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+**/*.*proj.user
+**/*.dbmdl
+**/*.jfm
+.classpath
+.project
+.settings
+.toolstarget
+
+# Environment / secrets
+.env
+secrets.dev.yaml
+values.dev.yaml
+
+# OS artifacts
+nul
+Thumbs.db
+.DS_Store
+
+# Local data
+tools/
+uploads/
+transfer_log.txt
+
+# Misc
+**/bin
+**/obj
+**/charts
+node_modules/
+npm-debug.log

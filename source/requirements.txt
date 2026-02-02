@@ -1,0 +1,5 @@
+flask
+werkzeug
+Flask-BasicAuth>=0.2.0
+pyftpdlib>=1.5.9
+impacket>=0.11.0
