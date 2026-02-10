@@ -29,6 +29,13 @@ venv/
 secrets.dev.yaml
 values.dev.yaml
 
+# Claude
+.claude/
+claude_plan.md
+CLAUDE.md
+**/CLAUDE.md
+tmpclaude-*
+
 # OS artifacts
 nul
 Thumbs.db

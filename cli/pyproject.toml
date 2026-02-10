@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pftp"
-version = "2.0.1"
+version = "2.0.4"
 description = "PFTP - Pentest File Transfer Protocols - CLI Tool"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [{name = "Ahmad Alawneh", email = "a.3alawneh@gmail.com"}]
-keywords = ["pentest", "file-transfer", "security", "hacking", "ctf", "ftp", "CTF"]
+keywords = ["pentest", "file-transfer", "security", "hacking", "ctf", "ftp", "CTF", "offensive security", "red team", "blue team", "cybersecurity", "pentesting", "ethical hacking"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Information Technology",
@@ -27,6 +27,7 @@ dependencies = [
     "click>=8.0",
     "docker>=6.0",
     "pyyaml>=6.0",
+    "rich>=13.0",
 ]
 
 [project.scripts]

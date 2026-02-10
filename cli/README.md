@@ -1,78 +1,160 @@
-# PFTP CLI
+# PFTP - Pentest File Transfer Protocols
 
-CLI tool for managing the PFTP (Pentest File Transfer Protocols) server.
+A lightweight, multi-protocol file transfer CLI tool for penetration testers, ethical hackers, and CTF players. PFTP manages a dockerized server that runs HTTP, FTP, and SMB simultaneously, making it easy to transfer tools and exfiltrate data during security assessments.
 
-A lightweight, multi-protocol file transfer hub for penetration testers, ethical hackers, and CTF players. Supports HTTP, FTP, and SMB simultaneously.
+**Docker Image**: [ahmadalawneh3/pftp](https://hub.docker.com/r/ahmadalawneh3/pftp)  
+**GitHub**: [github.com/AhmadAlawneh3/PFTP](https://github.com/AhmadAlawneh3/PFTP)
 
-**Docker Image**: [ahmadalawneh3/pftp](https://hub.docker.com/r/ahmadalawneh3/pftp)
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Commands](#commands)
+- [Requirements](#requirements)
+- [License](#license)
+
+## Features
+
+- **Multi-Protocol Support**: HTTP, FTP, and SMB running simultaneously
+- **Interactive Setup**: Wizard-based installation and configuration
+- **Web UI**: Download command generation for PowerShell, wget, curl, bitsadmin, and base64
+- **File Upload/Exfiltration**: Built-in support for receiving files
+- **Optional Authentication**: Secure access across all protocols
+- **Auto Network Detection**: Prioritizes VPN/tun interfaces
+- **Live Activity Logs**: Real-time monitoring via SSE
+- **Docker-Powered**: Isolated, reproducible environment with configurable restart policies
 
 ## Installation
 
+**Recommended (with pipx):**
 ```bash
 pipx install pftp
 ```
 
-Or with pip:
-
+**With pip:**
 ```bash
 pip install pftp
 ```
 
-## Quick Start
+**Requirements:**
+- Python 3.8+
+- Docker
+
+## Usage
+
+### Initial Setup
+
+Install and configure PFTP with the interactive wizard:
 
 ```bash
-# Install and configure (interactive wizard)
 pftp install
+```
 
-# Start the server
+The wizard will guide you through:
+- Directory configuration
+- Protocol selection (HTTP, FTP, SMB)
+- Authentication settings
+- Docker restart policy
+
+### Starting the Server
+
+```bash
 pftp start
+```
 
-# Check status
-pftp status
+Output:
+```
+✓ Server started
 
-# Add tools
+Server URLs:
+  • HTTP:  http://192.168.1.100:1234
+  • FTP:   ftp://192.168.1.100:21
+```
+
+### Adding Tools
+
+Add single files:
+```bash
 pftp add-tool /path/to/linpeas.sh
-pftp add-tool /path/to/windows/ --recursive --category windows
+```
 
-# View logs
-pftp logs
+Add directories with categorization:
+```bash
+pftp add-tool /path/to/windows-tools/ --recursive --category windows
+pftp add-tool /path/to/linux-tools/ --recursive --category linux
+```
 
+### Checking Status
+
+```bash
+pftp status
+```
+
+Shows running status, enabled protocols, URLs, and configuration.
+
+### Managing the Server
+
+```bash
 # Stop the server
 pftp stop
+
+# Restart the server
+pftp restart
+
+# View live logs
+pftp logs
+
+# Reconfigure settings
+pftp configure
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `pftp install` | Install and configure (interactive wizard) |
-| `pftp configure` | Reconfigure settings (interactive or flags) |
+| `pftp install` | Install and configure PFTP (interactive wizard) |
 | `pftp start` | Start the server |
 | `pftp stop` | Stop the server |
 | `pftp restart` | Restart the server |
-| `pftp status` | Show status and configuration |
-| `pftp logs` | View server logs |
-| `pftp update` | Update to latest Docker image |
-| `pftp remove` | Uninstall pftp |
-| `pftp add-tool` | Add files to tools directory |
-| `pftp version` | Show version |
+| `pftp status` | Show server status and configuration |
+| `pftp configure` | Reconfigure settings (interactive or via flags) |
+| `pftp add-tool <path>` | Add files/directories to tools |
+| `pftp logs` | View server logs (live by default) |
+| `pftp update` | Update to latest version |
+| `pftp remove` | Uninstall PFTP |
+| `pftp version` | Show version information |
+| `pftp --help` | Show help for any command |
 
-## Features
+### Common Options
 
-- Multi-protocol: HTTP, FTP, and SMB running simultaneously
-- Interactive setup wizard with `pftp install`
-- Optional authentication across all protocols
-- Configurable Docker restart policy
-- Auto-detects network interfaces (prioritizes VPN/tun0)
-- Web UI with download command generation (PowerShell, wget, curl, bitsadmin, base64)
-- File upload/exfiltration support
-- Live activity logs via SSE
+**Configuration flags** (for non-interactive setup):
+```bash
+pftp install --yes --http-port 8080 --enable-ftp --auth --auth-username admin
+pftp configure --disable-smb --http-port 9000
+```
+
+**Add-tool options**:
+```bash
+pftp add-tool <file> [--category <name>] [--recursive]
+```
+
+**Logs options**:
+```bash
+pftp logs [--follow] [--lines <n>]
+```
 
 ## Requirements
 
-- Python 3.8+
-- Docker
+- **Python**: 3.8 or higher
+- **Docker**: Running Docker daemon
+- **Operating System**: Linux, macOS, or Windows with WSL2
 
 ## License
 
-MIT
+MIT License - See [LICENSE](../LICENSE) for details
+
+---
+
+**Author**: Ahmad Alawneh  
+**Repository**: [github.com/AhmadAlawneh3/PFTP](https://github.com/AhmadAlawneh3/PFTP)

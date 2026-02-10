@@ -204,6 +204,13 @@ class HTTPServer(BaseServer):
             tools = get_tools_structure(tools_folder, ignore_dirs)
             return jsonify(tools)
 
+        @app.route('/api/uploaded-files')
+        @basic_auth.required
+        def get_uploaded_files_api():
+            """API endpoint to get uploaded files list"""
+            files = get_uploaded_files(upload_folder)
+            return jsonify(files)
+
         @app.route('/api/activity-log')
         @basic_auth.required
         def get_activity_log_api():

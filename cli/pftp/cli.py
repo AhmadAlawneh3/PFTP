@@ -6,6 +6,14 @@ import subprocess
 import re
 from pathlib import Path
 
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.prompt import Prompt, Confirm
+from rich.text import Text
+from rich import box
+
 from . import __version__
 from .config import Config
 from .docker_manager import DockerManager
@@ -21,6 +29,17 @@ from .constants import (
     SMB_NETBIOS_PORT,
 )
 
+console = Console()
+
+# ASCII Logo
+LOGO = """
+[cyan]    ____  ________________[/cyan]
+[cyan]   / __ \\/ ____/_  __/ __ \\[/cyan]
+[cyan]  / /_/ / /_    / / / /_/ /[/cyan]
+[cyan] / ____/ __/   / / / ____/[/cyan]
+[cyan]/_/   /_/     /_/ /_/[/cyan]
+"""
+
 
 def get_config_path(data_dir: Path = None) -> Path:
     """Get configuration file path"""
@@ -30,12 +49,7 @@ def get_config_path(data_dir: Path = None) -> Path:
 
 
 def hash_password(password: str) -> str:
-    """Return password as-is for multi-protocol compatibility.
-
-    FTP and SMB protocols need the plaintext password to compute
-    their own authentication hashes (NTLM, etc). Bcrypt is one-way
-    and incompatible with these protocols.
-    """
+    """Return password as-is for multi-protocol compatibility."""
     return password
 
 
@@ -51,22 +65,14 @@ def get_local_ips():
         current_interface = None
 
         for line in result.stdout.split('\n'):
-            # Match interface name
             if_match = re.match(r'^\d+:\s+(\S+):', line)
             if if_match:
                 current_interface = if_match.group(1)
 
-            # Match IPv4 address
             ip_match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', line)
             if ip_match and current_interface:
                 ip = ip_match.group(1)
-                # Skip localhost
                 if ip != '127.0.0.1':
-                    # Priority system:
-                    # 0 = tun interfaces (VPN/pentest)
-                    # 1 = eth interfaces (ethernet)
-                    # 2 = wlan interfaces (wifi)
-                    # 3 = other interfaces
                     if current_interface.startswith('tun'):
                         priority = 0
                     elif current_interface.startswith('eth'):
@@ -75,14 +81,68 @@ def get_local_ips():
                         priority = 2
                     else:
                         priority = 3
-
                     ips.append((priority, ip, current_interface))
 
-        # Sort by priority and return IPs
         ips.sort()
         return [ip for _, ip, _ in ips]
     except Exception:
         return []
+
+
+def print_logo():
+    """Print ASCII logo banner"""
+    console.print(LOGO)
+    console.print(f"[dim]Pentest File Transfer Protocols[/dim] [cyan]v{__version__}[/cyan]")
+    console.print()
+
+
+def print_header(title: str, subtitle: str = None):
+    """Print a styled header with double-edge box"""
+    console.print()
+    header_text = Text(title, style="bold white", justify="center")
+    footer = f"[dim]v{__version__} • github.com/AhmadAlawneh3/PFTP[/dim]"
+    if subtitle:
+        footer = f"[dim]{subtitle}[/dim] • {footer}"
+    console.print(Panel(
+        header_text,    
+        subtitle=footer,
+        border_style="cyan",
+        box=box.DOUBLE_EDGE,
+        padding=(0, 2)
+    ))
+
+
+def print_step(step: int, total: int, title: str):
+    """Print a wizard step header"""
+    console.print(f"\n[bold cyan][Step {step}/{total}][/bold cyan] {title}")
+    console.print("[dim]" + "─" * 50 + "[/dim]")
+
+
+def print_success(message: str):
+    """Print success message"""
+    console.print(f"[green]✓[/green] {message}")
+
+
+def print_error(message: str):
+    """Print error message"""
+    console.print(f"[red]✗[/red] {message}", style="red")
+
+
+def print_warning(message: str):
+    """Print warning message"""
+    console.print(f"[yellow]![/yellow] {message}")
+
+
+def print_success_panel(title: str, content: str):
+    """Print a success panel with content"""
+    panel_content = f"[bold green]✓ {title}[/bold green]\n\n{content}"
+    console.print()
+    console.print(Panel(
+        panel_content,
+        border_style="green",
+        box=box.ROUNDED,
+        padding=(1, 2)
+    ))
 
 
 @click.group()
@@ -109,79 +169,85 @@ def cli():
 @click.option('--auth-password', help='Authentication password')
 @click.option('--restart-policy', type=click.Choice(['no', 'always', 'unless-stopped', 'on-failure']),
               help='Docker restart policy')
-@click.option('--skip-pull', is_flag=True, help='Skip pulling Docker image')
+@click.option('--skip-pull', is_flag=True, help='Skip downloading PFTP')
 def install(yes, data_dir, tools_dir, uploads_dir, http_port, ftp_port,
             enable_ftp, enable_smb, auth, auth_username, auth_password,
             restart_policy, skip_pull):
     """Install and configure pftp"""
 
-    click.echo(click.style("=== PFTP Installation ===\n", fg='cyan', bold=True))
+    # print_logo()
+    print_header("PFTP Installation", "Setup Wizard")
 
-    # Data directory
-    if not data_dir:
-        if yes:
-            data_dir = str(DEFAULT_DATA_DIR)
-        else:
-            data_dir = click.prompt('Data directory',
-                                   default=str(DEFAULT_DATA_DIR),
-                                   type=click.Path())
-
-    data_dir = Path(data_dir).expanduser()
-
-    # Interactive configuration (skip if --yes)
+    # Interactive configuration
     if not yes:
-        click.echo(f"\n{click.style('Protocol Configuration:', fg='yellow', bold=True)}")
+        # Step 1: Directory Configuration
+        print_step(1, 4, "Directory Configuration")
 
-        # HTTP configuration
-        if http_port is None:
-            http_port = click.prompt('HTTP port', default=DEFAULT_PORT, type=int)
+        if not data_dir:
+            data_dir = Prompt.ask(
+                "  [cyan]Data directory[/cyan]",
+                default=str(DEFAULT_DATA_DIR)
+            )
 
-        # FTP configuration
-        if enable_ftp is None:
-            enable_ftp = click.confirm('Enable FTP server', default=True)
-
-        if enable_ftp and ftp_port is None:
-            ftp_port = click.prompt('FTP port', default=FTP_PORT, type=int)
-
-        # SMB configuration
-        if enable_smb is None:
-            enable_smb = click.confirm('Enable SMB server', default=False)
-
-        # Directory configuration
-        click.echo(f"\n{click.style('Directory Configuration:', fg='yellow', bold=True)}")
+        data_dir = Path(data_dir).expanduser()
 
         if tools_dir is None:
-            if click.confirm('Use custom tools directory', default=False):
-                tools_dir = click.prompt('Tools directory path', type=click.Path())
+            if Confirm.ask("  [cyan]Use custom tools directory[/cyan]", default=False):
+                tools_dir = Prompt.ask("  [cyan]Tools directory path[/cyan]")
 
         if uploads_dir is None:
-            if click.confirm('Use custom uploads directory', default=False):
-                uploads_dir = click.prompt('Uploads directory path', type=click.Path())
+            if Confirm.ask("  [cyan]Use custom uploads directory[/cyan]", default=False):
+                uploads_dir = Prompt.ask("  [cyan]Uploads directory path[/cyan]")
 
-        # Authentication configuration
-        click.echo(f"\n{click.style('Authentication Configuration:', fg='yellow', bold=True)}")
+        # Step 2: Protocol Configuration
+        print_step(2, 4, "Protocol Configuration")
+
+        if http_port is None:
+            http_port = int(Prompt.ask("  [cyan]HTTP port[/cyan]", default=str(DEFAULT_PORT)))
+
+        if enable_ftp is None:
+            enable_ftp = Confirm.ask("  [cyan]Enable FTP server[/cyan]", default=True)
+
+        if enable_ftp and ftp_port is None:
+            ftp_port = int(Prompt.ask("  [cyan]FTP port[/cyan]", default=str(FTP_PORT)))
+
+        if enable_smb is None:
+            enable_smb = Confirm.ask("  [cyan]Enable SMB server[/cyan]", default=False)
+
+        # Step 3: Authentication
+        print_step(3, 4, "Authentication")
+
         if auth is None:
-            auth = click.confirm('Enable authentication', default=False)
+            auth = Confirm.ask("  [cyan]Enable authentication[/cyan]", default=False)
         if auth:
             if auth_username is None:
-                auth_username = click.prompt('Username', default='admin')
+                auth_username = Prompt.ask("  [cyan]Username[/cyan]", default="admin")
             if auth_password is None:
-                auth_password = click.prompt('Password', hide_input=True)
+                auth_password = Prompt.ask("  [cyan]Password[/cyan]", password=True)
 
-        # Docker configuration
-        click.echo(f"\n{click.style('Docker Configuration:', fg='yellow', bold=True)}")
+        # Step 4: Docker Setup
+        print_step(4, 4, "Docker Setup")
+
         if restart_policy is None:
-            if click.confirm('Configure restart policy', default=False):
-                click.echo("  Options:")
-                click.echo("    no             - Never restart automatically")
-                click.echo("    always         - Always restart (even after reboot)")
-                click.echo("    unless-stopped - Restart unless manually stopped (default)")
-                click.echo("    on-failure     - Restart only if container exits with error")
-                restart_policy = click.prompt('Restart policy',
-                    type=click.Choice(['no', 'always', 'unless-stopped', 'on-failure']),
-                    default='unless-stopped')
+            if Confirm.ask("  [cyan]Configure restart policy[/cyan]", default=False):
+                policy_table = Table(show_header=False, box=None, padding=(0, 2))
+                policy_table.add_column("Policy", style="green")
+                policy_table.add_column("Description", style="dim")
+                policy_table.add_row("no", "Never restart automatically")
+                policy_table.add_row("always", "Always restart (even after reboot)")
+                policy_table.add_row("unless-stopped", "Restart unless manually stopped")
+                policy_table.add_row("on-failure", "Restart only on errors")
+                console.print(policy_table)
+                restart_policy = Prompt.ask(
+                    "  [cyan]Restart policy[/cyan]",
+                    choices=['no', 'always', 'unless-stopped', 'on-failure'],
+                    default='unless-stopped'
+                )
     else:
-        # Use defaults for --yes mode
+        # Non-interactive defaults
+        if not data_dir:
+            data_dir = str(DEFAULT_DATA_DIR)
+        data_dir = Path(data_dir).expanduser()
         if http_port is None:
             http_port = DEFAULT_PORT
         if enable_ftp is None:
@@ -205,15 +271,19 @@ def install(yes, data_dir, tools_dir, uploads_dir, http_port, ftp_port,
     config_dir = data_dir / CONFIG_DIR
 
     # Create directories
-    click.echo(f"\n{click.style('Creating directories...', fg='cyan')}")
-    tools_dir.mkdir(parents=True, exist_ok=True)
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    config_dir.mkdir(parents=True, exist_ok=True)
-    click.echo(f"✓ Created {data_dir}")
-    if tools_dir != data_dir / TOOLS_DIR:
-        click.echo(f"✓ Tools directory: {tools_dir}")
-    if uploads_dir != data_dir / UPLOADS_DIR:
-        click.echo(f"✓ Uploads directory: {uploads_dir}")
+    console.print()
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        console=console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("Creating directories", total=None)
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+    print_success(f"Created {data_dir}")
 
     # Create configuration
     config = Config(
@@ -223,49 +293,72 @@ def install(yes, data_dir, tools_dir, uploads_dir, http_port, ftp_port,
         uploads_dir=uploads_dir if uploads_dir != data_dir / UPLOADS_DIR else None,
     )
 
-    # Configure protocols
     config.protocols['http']['port'] = http_port
     config.protocols['ftp']['enabled'] = enable_ftp
     config.protocols['ftp']['port'] = ftp_port if ftp_port else FTP_PORT
     config.protocols['smb']['enabled'] = enable_smb
 
-    # Authentication
     if auth:
         config.auth_enabled = True
         config.auth_username = auth_username or 'admin'
         config.auth_password_hash = hash_password(auth_password) if auth_password else ''
 
-    # Restart policy
     if restart_policy:
         config.restart_policy = restart_policy
 
     config_path = get_config_path(data_dir)
     config.save(config_path)
-    click.echo(f"✓ Configuration saved to {config_path}")
+    print_success("Configuration saved")
 
-    # Pull Docker image
+    # Download PFTP
     if not skip_pull:
-        click.echo(f"\nPulling Docker image...")
-        try:
-            dm = DockerManager(config)
-            dm.pull_image(config.docker_image)
-        except Exception as e:
-            click.echo(f"Warning: Could not pull image: {e}", err=True)
-            click.echo("You can pull it later with: pftp update")
+        console.print()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Downloading PFTP", total=None)
+            try:
+                dm = DockerManager(config)
+                dm.pull_image(config.docker_image)
+                progress.update(task, description="[green]✓ PFTP ready[/green]")
+            except Exception as e:
+                progress.update(task, description="[yellow]Warning: Download incomplete[/yellow]")
+                console.print("  [dim]You can download it later with: pftp update[/dim]")
 
-    click.echo(click.style(f"\n✓ Installation complete!", fg='green', bold=True))
-    click.echo(f"\n{click.style('Next steps:', fg='cyan', bold=True)}")
-    click.echo(f"  1. Add tools to {click.style(str(tools_dir), fg='yellow')}")
-    click.echo(f"  2. Run: {click.style('pftp start', fg='green')}")
-
-    # Show actual IPs if available
-    ips = get_local_ips()
-    if ips:
-        click.echo(f"  3. Access the web UI at:")
-        for ip in ips:
-            click.echo(f"     {click.style(f'http://{ip}:{http_port}', fg='cyan', bold=True)}")
-    else:
-        click.echo(f"  3. Access the web UI at {click.style(f'http://<your-ip>:{http_port}', fg='cyan')}")
+    # Start the server automatically
+    console.print()
+    print_success("Installation complete")
+    
+    try:
+        dm = DockerManager(config)
+        if dm.start_container():
+            print_success("Server started")
+            
+            # Show URLs
+            ips = get_local_ips()
+            if ips:
+                console.print()
+                console.print("[bold cyan]Server URLs:[/bold cyan]")
+                for proto_name, proto_config in config.protocols.items():
+                    if proto_config.get('enabled', True):
+                        p = proto_config.get('port')
+                        if proto_name == 'smb':
+                            console.print(f"  [cyan]•[/cyan] SMB:  [bold cyan]\\\\{ips[0]}\\tools[/bold cyan]")
+                        else:
+                            console.print(f"  [cyan]•[/cyan] {proto_name.upper()}:  [bold cyan]{proto_name}://{ips[0]}:{p}[/bold cyan]")
+                
+                console.print()
+                console.print("[bold]Next steps:[/bold]")
+                console.print("  [bright_black]1.[/bright_black] Add tools:  [green]pftp add-tool ~/linpeas.sh[/green]")
+                console.print("  [bright_black]2.[/bright_black] Status:     [green]pftp status[/green]")
+        else:
+            print_error("Failed to start server")
+            console.print("[bright_black]Run 'pftp start' to start the server manually[/bright_black]")
+    except Exception as e:
+        print_error(f"Could not start server: {e}")
+        console.print("[bright_black]Run 'pftp start' to start the server manually[/bright_black]")
 
 
 @cli.command()
@@ -285,17 +378,15 @@ def install(yes, data_dir, tools_dir, uploads_dir, http_port, ftp_port,
 def configure(enable_http, enable_ftp, enable_smb, http_port, ftp_port, smb_port,
               auth, auth_username, auth_password, tools_dir, uploads_dir,
               restart_policy):
-    """Reconfigure pftp settings (interactive if no options provided)"""
+    """Reconfigure pftp settings"""
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo("Error: pftp is not installed. Run 'pftp install' first.", err=True)
+        print_error("pftp is not installed. Run 'pftp install' first.")
         return
 
-    # Load current config
     config = Config.load(config_path)
 
-    # Check if any CLI flags were provided
     has_flags = any([
         enable_http is not None, enable_ftp is not None, enable_smb is not None,
         http_port is not None, ftp_port is not None, smb_port is not None,
@@ -303,200 +394,221 @@ def configure(enable_http, enable_ftp, enable_smb, http_port, ftp_port, smb_port
         tools_dir is not None, uploads_dir is not None, restart_policy is not None
     ])
 
-    # If no flags provided, run interactive mode
     if not has_flags:
-        click.echo(click.style("=== Current Configuration ===", fg='cyan', bold=True))
-        click.echo(f"\n{click.style('General:', fg='yellow', bold=True)}")
-        click.echo(f"  Data directory: {config.data_dir}")
-        click.echo(f"  Tools directory: {config.tools_dir}")
-        click.echo(f"  Uploads directory: {config.uploads_dir}")
-        click.echo(f"  Docker image: {config.docker_image}")
+        # Interactive mode - show current config
+        print_header("Current Configuration", "Review Settings")
+        console.print()
 
-        click.echo(f"\n{click.style('Protocols:', fg='yellow', bold=True)}")
+        # General info table
+        general_table = Table(show_header=False, box=box.ROUNDED, padding=(0, 2))
+        general_table.add_column("Setting", style="cyan", width=20)
+        general_table.add_column("Value", style="white")
+        general_table.add_row("Data directory", str(config.data_dir))
+        general_table.add_row("Tools directory", str(config.tools_dir))
+        general_table.add_row("Uploads directory", str(config.uploads_dir))
+        console.print(general_table)
+
+        # Protocols table
+        console.print("\n[bold cyan]Protocols[/bold cyan]")
+        proto_table = Table(box=box.HEAVY_HEAD)
+        proto_table.add_column("Protocol", style="cyan")
+        proto_table.add_column("Status", justify="center")
+        proto_table.add_column("Port", justify="center")
+        proto_table.add_column("Details", style="white")
+
         for proto_name, proto_config in config.protocols.items():
-            status = click.style('✓ Enabled', fg='green') if proto_config.get('enabled') else click.style('✗ Disabled', fg='red')
-            click.echo(f"  {proto_name.upper()}: {status}")
-            click.echo(f"    Port: {proto_config.get('port')}")
+            enabled = proto_config.get('enabled', True)
+            status = "[green]● Enabled[/green]" if enabled else "[bright_black]○ Disabled[/bright_black]"
+            port = str(proto_config.get('port', '-'))
+            details = ""
             if proto_name == 'ftp':
-                click.echo(f"    Passive ports: {proto_config.get('passive_start')}-{proto_config.get('passive_end')}")
+                details = f"Passive: {proto_config.get('passive_start')}-{proto_config.get('passive_end')}"
             elif proto_name == 'smb':
-                click.echo(f"    NetBIOS port: {proto_config.get('netbios_port')}")
+                details = f"NetBIOS: {proto_config.get('netbios_port')}"
+            proto_table.add_row(proto_name.upper(), status, port, details)
 
-        click.echo(f"\n{click.style('Authentication:', fg='yellow', bold=True)}")
+        console.print(proto_table)
+
+        # Auth & Docker info
+        console.print("\n[bold cyan]Other Settings[/bold cyan]")
+        other_table = Table(show_header=False, box=box.ROUNDED, padding=(0, 2))
+        other_table.add_column("Setting", style="cyan", width=20)
+        other_table.add_column("Value")
+
         if config.auth_enabled:
-            click.echo(f"  Status: {click.style('✓ Enabled', fg='green')}")
-            click.echo(f"  Username: {config.auth_username}")
+            other_table.add_row("Authentication", f"[green]● Enabled[/green] [bright_black](User: {config.auth_username})[/bright_black]")
         else:
-            click.echo(f"  Status: {click.style('✗ Disabled', fg='red')}")
+            other_table.add_row("Authentication", "[bright_black]○ Disabled[/bright_black]")
 
-        click.echo(f"\n{click.style('Docker:', fg='yellow', bold=True)}")
         policy_desc = {
             'no': 'Never restart',
             'always': 'Always restart',
-            'unless-stopped': 'Restart unless stopped manually',
-            'on-failure': 'Restart on failure only'
+            'unless-stopped': 'Restart unless stopped',
+            'on-failure': 'Restart on failure'
         }
-        click.echo(f"  Restart policy: {config.restart_policy} ({policy_desc.get(config.restart_policy, '')})")
+        other_table.add_row("Restart Policy", f"[white]{config.restart_policy} ({policy_desc.get(config.restart_policy, '')})[/white]")
+        console.print(other_table)
 
-        click.echo(f"\n{click.style('=== Reconfigure Settings ===', fg='cyan', bold=True)}")
-        click.echo(click.style("Press Ctrl+C to cancel at any time\n", fg='yellow'))
+        # Reconfigure prompt
+        print_header("Reconfigure Settings", "Interactive Mode")
+        console.print("[dim]Press Ctrl+C to cancel[/dim]")
 
         try:
-            # Protocol configuration
-            click.echo(click.style('Protocol Settings:', fg='yellow', bold=True))
-            config.protocols['http']['enabled'] = click.confirm('Enable HTTP', default=config.protocols['http']['enabled'])
+            # Step 1: Protocol Settings
+            print_step(1, 4, "Protocol Settings")
+
+            config.protocols['http']['enabled'] = Confirm.ask(
+                "  [cyan]Enable HTTP[/cyan]",
+                default=config.protocols['http']['enabled']
+            )
             if config.protocols['http']['enabled']:
-                config.protocols['http']['port'] = click.prompt('HTTP port',
-                    default=config.protocols['http']['port'], type=int)
-                config.port = config.protocols['http']['port']  # Update legacy
+                config.protocols['http']['port'] = int(Prompt.ask(
+                    "  [cyan]HTTP port[/cyan]",
+                    default=str(config.protocols['http']['port'])
+                ))
+                config.port = config.protocols['http']['port']
 
-            config.protocols['ftp']['enabled'] = click.confirm('Enable FTP', default=config.protocols['ftp']['enabled'])
+            config.protocols['ftp']['enabled'] = Confirm.ask(
+                "  [cyan]Enable FTP[/cyan]",
+                default=config.protocols['ftp']['enabled']
+            )
             if config.protocols['ftp']['enabled']:
-                config.protocols['ftp']['port'] = click.prompt('FTP port',
-                    default=config.protocols['ftp']['port'], type=int)
+                config.protocols['ftp']['port'] = int(Prompt.ask(
+                    "  [cyan]FTP port[/cyan]",
+                    default=str(config.protocols['ftp']['port'])
+                ))
 
-            config.protocols['smb']['enabled'] = click.confirm('Enable SMB', default=config.protocols['smb']['enabled'])
+            config.protocols['smb']['enabled'] = Confirm.ask(
+                "  [cyan]Enable SMB[/cyan]",
+                default=config.protocols['smb']['enabled']
+            )
             if config.protocols['smb']['enabled']:
-                config.protocols['smb']['port'] = click.prompt('SMB port',
-                    default=config.protocols['smb']['port'], type=int)
+                config.protocols['smb']['port'] = int(Prompt.ask(
+                    "  [cyan]SMB port[/cyan]",
+                    default=str(config.protocols['smb']['port'])
+                ))
 
-            # Authentication
-            click.echo(f"\n{click.style('Authentication Settings:', fg='yellow', bold=True)}")
-            config.auth_enabled = click.confirm('Enable authentication', default=config.auth_enabled)
+            # Step 2: Authentication Settings
+            print_step(2, 4, "Authentication Settings")
+
+            config.auth_enabled = Confirm.ask(
+                "  [cyan]Enable authentication[/cyan]",
+                default=config.auth_enabled
+            )
             if config.auth_enabled:
-                config.auth_username = click.prompt('Username',
-                    default=config.auth_username or 'admin')
-                new_password = click.prompt('Password (leave empty to keep current)',
-                    default='', hide_input=True, show_default=False)
+                config.auth_username = Prompt.ask(
+                    "  [cyan]Username[/cyan]",
+                    default=config.auth_username or 'admin'
+                )
+                new_password = Prompt.ask(
+                    "  [cyan]Password[/cyan] [dim](empty to keep current)[/dim]",
+                    default="",
+                    password=True
+                )
                 if new_password:
                     config.auth_password_hash = hash_password(new_password)
-                    click.echo(click.style('  ✓ Password set', fg='green'))
+                    print_success("Password updated")
 
-            # Directory configuration
-            click.echo(f"\n{click.style('Directory Settings:', fg='yellow', bold=True)}")
-            if click.confirm('Configure custom tools directory', default=False):
-                from pathlib import Path
-                tools_path = click.prompt('Tools directory path',
-                    default=str(config.tools_dir), type=str)
+            # Step 3: Directory Settings
+            print_step(3, 4, "Directory Settings")
+
+            if Confirm.ask("  [cyan]Configure custom tools directory[/cyan]", default=False):
+                tools_path = Prompt.ask("  [cyan]Tools directory path[/cyan]", default=str(config.tools_dir))
                 config.tools_dir = Path(tools_path)
                 config.tools_dir.mkdir(parents=True, exist_ok=True)
 
-            if click.confirm('Configure custom uploads directory', default=False):
-                from pathlib import Path
-                uploads_path = click.prompt('Uploads directory path',
-                    default=str(config.uploads_dir), type=str)
+            if Confirm.ask("  [cyan]Configure custom uploads directory[/cyan]", default=False):
+                uploads_path = Prompt.ask("  [cyan]Uploads directory path[/cyan]", default=str(config.uploads_dir))
                 config.uploads_dir = Path(uploads_path)
                 config.uploads_dir.mkdir(parents=True, exist_ok=True)
 
-            # Docker settings
-            click.echo(f"\n{click.style('Docker Settings:', fg='yellow', bold=True)}")
-            if click.confirm('Configure restart policy', default=False):
-                click.echo("  Options:")
-                click.echo("    no             - Never restart automatically")
-                click.echo("    always         - Always restart (even after reboot)")
-                click.echo("    unless-stopped - Restart unless manually stopped (default)")
-                click.echo("    on-failure     - Restart only if container exits with error")
-                config.restart_policy = click.prompt('Restart policy',
-                    type=click.Choice(['no', 'always', 'unless-stopped', 'on-failure']),
-                    default=config.restart_policy)
+            # Step 4: Docker Settings
+            print_step(4, 4, "Docker Settings")
+
+            if Confirm.ask("  [cyan]Configure restart policy[/cyan]", default=False):
+                policy_table = Table(show_header=False, box=None, padding=(0, 2))
+                policy_table.add_column("Policy", style="green")
+                policy_table.add_column("Description", style="dim")
+                policy_table.add_row("no", "Never restart automatically")
+                policy_table.add_row("always", "Always restart (even after reboot)")
+                policy_table.add_row("unless-stopped", "Restart unless manually stopped")
+                policy_table.add_row("on-failure", "Restart only on errors")
+                console.print(policy_table)
+                config.restart_policy = Prompt.ask(
+                    "  [cyan]Restart policy[/cyan]",
+                    choices=['no', 'always', 'unless-stopped', 'on-failure'],
+                    default=config.restart_policy
+                )
 
             config.save(config_path)
-            click.echo(click.style(f"\n✓ Configuration updated", fg='green', bold=True))
+            console.print()
+            print_success("Configuration updated")
+            console.print("[dim]Run 'pftp restart' to apply changes[/dim]")
 
-            # Check if we're on Windows (PowerShell doesn't support &&)
-            import platform
-            if platform.system() == 'Windows':
-                click.echo(f"Directory changes require container recreation:")
-                click.echo(f"  1. {click.style('pftp remove', fg='cyan')}")
-                click.echo(f"  2. {click.style('pftp start', fg='cyan')}")
-            else:
-                click.echo(f"Run '{click.style('pftp remove && pftp start', fg='cyan')}' to recreate container")
-
-            click.echo(f"For other changes, run '{click.style('pftp restart', fg='cyan')}'")
-
-        except click.Abort:
-            click.echo(click.style("\n✗ Configuration cancelled", fg='yellow'))
+        except KeyboardInterrupt:
+            console.print()
+            print_warning("Configuration cancelled")
             return
 
     else:
-        # Non-interactive mode with CLI flags
-        click.echo("=== Reconfigure PFTP ===\n")
+        # Non-interactive mode
+        print_header("Reconfigure PFTP", "Flag Mode")
+        console.print()
 
-        # Protocol enable/disable flags
         if enable_http is not None:
             config.protocols['http']['enabled'] = enable_http
-            click.echo(f"{'Enabled' if enable_http else 'Disabled'} HTTP protocol")
+            print_success(f"{'Enabled' if enable_http else 'Disabled'} HTTP protocol")
 
         if enable_ftp is not None:
             config.protocols['ftp']['enabled'] = enable_ftp
-            click.echo(f"{'Enabled' if enable_ftp else 'Disabled'} FTP protocol")
+            print_success(f"{'Enabled' if enable_ftp else 'Disabled'} FTP protocol")
 
         if enable_smb is not None:
             config.protocols['smb']['enabled'] = enable_smb
-            click.echo(f"{'Enabled' if enable_smb else 'Disabled'} SMB protocol")
+            print_success(f"{'Enabled' if enable_smb else 'Disabled'} SMB protocol")
 
-        # Port configuration
         if http_port is not None:
             config.protocols['http']['port'] = http_port
-            config.port = http_port  # Update legacy port
-            click.echo(f"Set HTTP port to {http_port}")
+            config.port = http_port
+            print_success(f"Set HTTP port to {http_port}")
 
         if ftp_port is not None:
             config.protocols['ftp']['port'] = ftp_port
-            click.echo(f"Set FTP port to {ftp_port}")
+            print_success(f"Set FTP port to {ftp_port}")
 
         if smb_port is not None:
             config.protocols['smb']['port'] = smb_port
-            click.echo(f"Set SMB port to {smb_port}")
+            print_success(f"Set SMB port to {smb_port}")
 
-        # Authentication
         if auth is not None:
             config.auth_enabled = auth
-            click.echo(f"{'Enabled' if auth else 'Disabled'} authentication")
+            print_success(f"{'Enabled' if auth else 'Disabled'} authentication")
 
         if auth_username is not None:
             config.auth_username = auth_username
-            click.echo(f"Set authentication username to {auth_username}")
+            print_success(f"Set username to {auth_username}")
 
         if auth_password is not None:
             config.auth_password_hash = hash_password(auth_password)
-            click.echo(f"Set authentication password")
+            print_success("Set authentication password")
 
-        # Directory configuration
-        dirs_changed = False
         if tools_dir is not None:
-            from pathlib import Path
             config.tools_dir = Path(tools_dir)
             config.tools_dir.mkdir(parents=True, exist_ok=True)
-            click.echo(f"Set tools directory to {tools_dir}")
-            dirs_changed = True
+            print_success(f"Set tools directory to {tools_dir}")
 
         if uploads_dir is not None:
-            from pathlib import Path
             config.uploads_dir = Path(uploads_dir)
             config.uploads_dir.mkdir(parents=True, exist_ok=True)
-            click.echo(f"Set uploads directory to {uploads_dir}")
-            dirs_changed = True
+            print_success(f"Set uploads directory to {uploads_dir}")
 
-        # Docker settings
         if restart_policy is not None:
             config.restart_policy = restart_policy
-            click.echo(f"Set restart policy to {restart_policy}")
+            print_success(f"Set restart policy to {restart_policy}")
 
         config.save(config_path)
-
-        click.echo(click.style(f"\n✓ Configuration updated", fg='green', bold=True))
-        if dirs_changed:
-            import platform
-            if platform.system() == 'Windows':
-                click.echo(f"Directory changes require container recreation:")
-                click.echo(f"  1. {click.style('pftp remove', fg='cyan')}")
-                click.echo(f"  2. {click.style('pftp start', fg='cyan')}")
-            else:
-                click.echo(f"Directory changes require container recreation:")
-                click.echo(f"  Run '{click.style('pftp remove && pftp start', fg='cyan')}'")
-        else:
-            click.echo(f"Run '{click.style('pftp restart', fg='cyan')}' to apply changes")
+        console.print()
+        console.print("[dim]Run 'pftp restart' to apply changes[/dim]")
 
 
 @cli.command()
@@ -508,16 +620,14 @@ def start(detach, port, foreground):
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo("Error: pftp is not installed. Run 'pftp install' first.", err=True)
+        print_error("pftp is not installed. Run 'pftp install' first.")
         return
 
     config = Config.load(config_path)
 
-    # Override port if specified
     if port:
         config.port = port
 
-    # Ensure directories exist
     config.tools_dir.mkdir(parents=True, exist_ok=True)
     config.uploads_dir.mkdir(parents=True, exist_ok=True)
 
@@ -525,17 +635,35 @@ def start(detach, port, foreground):
         dm = DockerManager(config)
 
         if dm.is_running():
-            click.echo("pftp is already running")
-            click.echo("Run 'pftp status' for details")
+            print_warning("pftp is already running")
+            console.print("[dim]Run 'pftp status' for details[/dim]")
             return
 
         if dm.start_container():
-            if foreground:
-                dm.get_logs(follow=True)
+            print_success("Server started")
+            
+            # Show URLs
+            ips = get_local_ips()
+            if ips:
+                console.print()
+                console.print("[bold cyan]Server URLs:[/bold cyan]")
+                for proto_name, proto_config in config.protocols.items():
+                    if proto_config.get('enabled', True):
+                        p = proto_config.get('port')
+                        if proto_name == 'smb':
+                            console.print(f"  [cyan]•[/cyan] SMB:  [bold cyan]\\\\{ips[0]}\\tools[/bold cyan]")
+                        else:
+                            console.print(f"  [cyan]•[/cyan] {proto_name.upper()}:  [bold cyan]{proto_name}://{ips[0]}:{p}[/bold cyan]")
         else:
-            click.echo("Failed to start container", err=True)
+            print_error("Failed to start server")
+            return
+
+        if foreground:
+            console.print("\n[dim]Following logs (Ctrl+C to stop)...[/dim]\n")
+            dm.get_logs(follow=True)
+
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        print_error(str(e))
 
 
 @cli.command()
@@ -544,16 +672,22 @@ def stop():
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo("Error: pftp is not installed. Run 'pftp install' first.", err=True)
+        print_error("pftp is not installed. Run 'pftp install' first.")
         return
 
     config = Config.load(config_path)
 
     try:
         dm = DockerManager(config)
+
+        if not dm.is_running():
+            print_warning("pftp is not running")
+            return
+
         dm.stop_container()
+        print_success("Server stopped")
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        print_error(str(e))
 
 
 @cli.command()
@@ -562,7 +696,7 @@ def restart():
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo(click.style("Error: pftp is not installed. Run 'pftp install' first.", fg='red'), err=True)
+        print_error("pftp is not installed. Run 'pftp install' first.")
         return
 
     config = Config.load(config_path)
@@ -570,16 +704,27 @@ def restart():
     try:
         dm = DockerManager(config)
 
-        click.echo(click.style("Stopping container...", fg='yellow'))
         dm.stop_container()
-
-        click.echo(click.style("Removing old container...", fg='yellow'))
         dm.remove_container()
-
-        click.echo(click.style("Starting container with new configuration...", fg='yellow'))
         dm.start_container()
+        
+        print_success("Server restarted")
+        
+        # Show URLs
+        ips = get_local_ips()
+        if ips:
+            console.print()
+            console.print("[bold cyan]Server URLs:[/bold cyan]")
+            for proto_name, proto_config in config.protocols.items():
+                if proto_config.get('enabled', True):
+                    p = proto_config.get('port')
+                    if proto_name == 'smb':
+                        console.print(f"  [cyan]•[/cyan] SMB:  [bold cyan]\\\\{ips[0]}\\tools[/bold cyan]")
+                    else:
+                        console.print(f"  [cyan]•[/cyan] {proto_name.upper()}:  [bold cyan]{proto_name}://{ips[0]}:{p}[/bold cyan]")
+
     except Exception as e:
-        click.echo(click.style(f"Error: {e}", fg='red'), err=True)
+        print_error(str(e))
 
 
 @cli.command()
@@ -588,70 +733,80 @@ def status():
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo(click.style("pftp is not installed", fg='yellow'))
-        click.echo(f"Run '{click.style('pftp install', fg='green')}' to get started")
+        print_warning("pftp is not installed")
+        console.print("[dim]Run 'pftp install' to get started[/dim]")
         return
 
     config = Config.load(config_path)
 
-    click.echo(click.style("=== PFTP Status ===\n", fg='cyan', bold=True))
-
     try:
         dm = DockerManager(config)
         status_info = dm.get_status()
+        ips = get_local_ips()
 
-        if status_info and status_info.get('status') != 'not_found':
-            status_color = 'green' if status_info['status'] == 'running' else 'yellow'
-            click.echo(f"Status: {click.style(status_info['status'], fg=status_color, bold=True)}")
-            click.echo(f"Container ID: {click.style(status_info['id'], fg='cyan')}")
-            click.echo(f"Image: {click.style(status_info['image'], fg='cyan')}")
+        # Build status panel
+        is_running = status_info and status_info.get('status') == 'running'
 
-            if status_info['status'] == 'running':
-                ips = get_local_ips()
-                if ips:
-                    click.echo(f"\n{click.style('Server URLs:', fg='green', bold=True)}")
-                    for ip in ips:
-                        click.echo(f"  {click.style(f'http://{ip}:{config.port}', fg='cyan', bold=True)}")
-                else:
-                    click.echo(f"\nServer: {click.style(f'http://<your-ip>:{config.port}', fg='cyan')}")
+        if is_running:
+            status_text = "[bold green]● RUNNING[/bold green]"
+        elif status_info and status_info.get('status') != 'not_found':
+            status_text = f"[yellow]○ {status_info['status'].upper()}[/yellow]"
         else:
-            click.echo(f"Status: {click.style('not running', fg='red')}")
+            status_text = "[red]○ STOPPED[/red]"
 
-        click.echo(f"\n{click.style('=== Configuration ===', fg='cyan', bold=True)}")
+        # Print logo and header
+        # print_logo()
+        print_header("PFTP Status", "Server Information")
+        console.print()
 
-        # Show protocol status
-        click.echo(f"\n{click.style('Protocols:', fg='yellow', bold=True)}")
+        # Server status table
+        status_table = Table(show_header=False, box=box.ROUNDED, padding=(0, 2))
+        status_table.add_column("Label", style="cyan", width=15)
+        status_table.add_column("Value")
+
+        status_table.add_row("Status", status_text)
+
+        console.print(status_table)
+
+        # Protocols table with URL column
+        console.print("\n[bold cyan]Protocols[/bold cyan]")
+        proto_table = Table(box=box.HEAVY_HEAD)
+        proto_table.add_column("Protocol", style="cyan", width=10)
+        proto_table.add_column("Status", justify="center", width=14)
+        proto_table.add_column("Port", justify="center", width=8)
+        proto_table.add_column("URL", style="white")
+
         for proto_name, proto_config in config.protocols.items():
             enabled = proto_config.get('enabled', True)
-            status_icon = click.style('✓', fg='green') if enabled else click.style('✗', fg='red')
-            port = proto_config.get('port')
+            status = "[green]● Running[/green]" if (enabled and is_running) else (
+                "[yellow]● Enabled[/yellow]" if enabled else "[bright_black]○ Disabled[/bright_black]"
+            )
+            port = str(proto_config.get('port', '-'))
 
-            if enabled and status_info and status_info.get('status') == 'running':
-                ips = get_local_ips()
-                if ips and ips[0]:
-                    url = f"{proto_name}://{ips[0]}:{port}"
-                    click.echo(f"  {status_icon} {proto_name.upper()}: {click.style(url, fg='cyan', bold=True)}")
+            # Build URL
+            if enabled and ips:
+                if proto_name == 'smb':
+                    url = f"\\\\{ips[0]}\\tools"
                 else:
-                    click.echo(f"  {status_icon} {proto_name.upper()}: Port {port}")
+                    url = f"{proto_name}://{ips[0]}:{port}"
             else:
-                state = "Enabled" if enabled else "Disabled"
-                click.echo(f"  {status_icon} {proto_name.upper()}: {state} (Port {port})")
+                url = "-"
 
-        # Show authentication status
-        click.echo(f"\n{click.style('Authentication:', fg='yellow', bold=True)}")
-        if config.auth_enabled:
-            click.echo(f"  {click.style('✓', fg='green')} Enabled (User: {config.auth_username})")
-        else:
-            click.echo(f"  {click.style('✗', fg='red')} Disabled")
+            proto_table.add_row(proto_name.upper(), status, port, url)
 
-        # Show directories
-        click.echo(f"\n{click.style('Directories:', fg='yellow', bold=True)}")
-        click.echo(f"  Data: {click.style(str(config.data_dir), fg='cyan')}")
-        click.echo(f"  Tools: {click.style(str(config.tools_dir), fg='cyan')}")
-        click.echo(f"  Uploads: {click.style(str(config.uploads_dir), fg='cyan')}")
+        console.print(proto_table)
 
-        # Show Docker settings
-        click.echo(f"\n{click.style('Docker:', fg='yellow', bold=True)}")
+        # Configuration table
+        console.print("\n[bold cyan]Configuration[/bold cyan]")
+        info_table = Table(show_header=False, box=box.ROUNDED, padding=(0, 2))
+        info_table.add_column("Setting", style="cyan", width=18)
+        info_table.add_column("Value")
+
+        auth_status = f"[green]● Enabled[/green] [bright_black](User: {config.auth_username})[/bright_black]" if config.auth_enabled else "[bright_black]○ Disabled[/bright_black]"
+        info_table.add_row("Authentication", auth_status)
+        info_table.add_row("Tools Directory", f"[white]{config.tools_dir}[/white]")
+        info_table.add_row("Uploads Directory", f"[white]{config.uploads_dir}[/white]")
+
         policy_desc = {
             'no': 'Never restart',
             'always': 'Always restart',
@@ -659,10 +814,18 @@ def status():
             'on-failure': 'Restart on failure'
         }
         policy = config.restart_policy or 'unless-stopped'
-        click.echo(f"  Restart policy: {click.style(policy, fg='cyan')} ({policy_desc.get(policy, '')})")
+        info_table.add_row("Restart Policy", f"[white]{policy}[/white]")
+
+        console.print(info_table)
+
+        # Quick commands hint
+        if is_running:
+            console.print("\n[dim]Commands: pftp stop | pftp logs | pftp restart[/dim]")
+        else:
+            console.print("\n[dim]Commands: pftp start | pftp configure | pftp remove[/dim]")
 
     except Exception as e:
-        click.echo(click.style(f"Error: {e}", fg='red'), err=True)
+        print_error(str(e))
 
 
 @cli.command()
@@ -673,7 +836,7 @@ def logs(follow, lines):
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo("Error: pftp is not installed. Run 'pftp install' first.", err=True)
+        print_error("pftp is not installed. Run 'pftp install' first.")
         return
 
     config = Config.load(config_path)
@@ -682,40 +845,47 @@ def logs(follow, lines):
         dm = DockerManager(config)
         dm.get_logs(follow=follow, lines=lines)
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        print_error(str(e))
 
 
 @cli.command()
-@click.option('--restart', is_flag=True, help='Automatically restart after update')
-def update(restart):
+@click.option('--restart', 'do_restart', is_flag=True, help='Automatically restart after update')
+def update(do_restart):
     """Update to latest Docker image"""
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo("Error: pftp is not installed. Run 'pftp install' first.", err=True)
+        print_error("pftp is not installed. Run 'pftp install' first.")
         return
 
     config = Config.load(config_path)
 
     try:
         dm = DockerManager(config)
-
-        # Check if running
         was_running = dm.is_running()
 
-        # Pull latest image
-        if dm.pull_image(config.docker_image):
-            if was_running and restart:
-                click.echo("\nRestarting with new image...")
-                dm.stop_container()
-                dm.start_container()
-            elif was_running:
-                click.echo("\nRun 'pftp restart' to use the new image")
-        else:
-            click.echo("Update failed", err=True)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Updating PFTP", total=None)
+            if dm.pull_image(config.docker_image):
+                progress.update(task, description="[green]✓ PFTP updated[/green]")
+
+                if was_running and do_restart:
+                    progress.update(task, description="Restarting server")
+                    dm.stop_container()
+                    dm.remove_container()
+                    dm.start_container()
+                    progress.update(task, description="[green]✓ Server restarted[/green]")
+                elif was_running:
+                    console.print("\n[dim]Run 'pftp restart' to use the new version[/dim]")
+            else:
+                progress.update(task, description="[red]✗ Update failed[/red]")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        print_error(str(e))
 
 
 @cli.command()
@@ -726,7 +896,7 @@ def remove(keep_data, purge):
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo("pftp is not installed")
+        print_warning("pftp is not installed")
         return
 
     config = Config.load(config_path)
@@ -734,31 +904,42 @@ def remove(keep_data, purge):
     if purge:
         keep_data = False
 
-    click.echo("=== Uninstalling PFTP ===\n")
+    print_header("Uninstall PFTP", "Remove Container")
+    console.print()
 
     try:
         dm = DockerManager(config)
 
-        # Stop and remove container
-        if dm.is_running():
-            click.echo("Stopping container...")
-            dm.stop_container()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.description}"),
+            console=console,
+        ) as progress:
+            if dm.is_running():
+                task = progress.add_task("Removing PFTP", total=None)
+                dm.stop_container()
+            else:
+                task = progress.add_task("Removing PFTP", total=None)
 
-        click.echo("Removing container...")
-        dm.remove_container()
+            dm.remove_container()
+            progress.update(task, description="[green]✓ PFTP removed[/green]")
 
-        # Remove data if requested
         if not keep_data:
-            if click.confirm(f"Remove all data from {config.data_dir}?", default=False):
+            console.print()
+            if Confirm.ask(f"[yellow]Remove all data from {config.data_dir}?[/yellow]", default=False):
                 shutil.rmtree(config.data_dir)
-                click.echo(f"✓ Removed {config.data_dir}")
+                print_success(f"Removed {config.data_dir}")
+            else:
+                print_success(f"Data preserved in {config.data_dir}")
         else:
-            click.echo(f"✓ Data preserved in {config.data_dir}")
+            print_success(f"Data preserved in {config.data_dir}")
 
-        click.echo("\n✓ pftp uninstalled")
+        console.print()
+        print_success("pftp uninstalled successfully")
+        console.print("[dim]Run 'pftp install' to reinstall[/dim]")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        print_error(str(e))
 
 
 @cli.command()
@@ -770,13 +951,12 @@ def add_tool(source, category, recursive):
 
     config_path = get_config_path()
     if not config_path.exists():
-        click.echo(click.style("Error: pftp is not installed. Run 'pftp install' first.", fg='red'), err=True)
+        print_error("pftp is not installed. Run 'pftp install' first.")
         return
 
     config = Config.load(config_path)
     source_path = Path(source).resolve()
 
-    # Determine destination
     if category:
         dest_dir = config.tools_dir / category
     else:
@@ -784,29 +964,29 @@ def add_tool(source, category, recursive):
 
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # Handle file or directory
     if source_path.is_file():
         dest_file = dest_dir / source_path.name
         shutil.copy2(source_path, dest_file)
-        click.echo(click.style(f"✓ Copied: {source_path.name} → {dest_dir}", fg='green'))
+        print_success(f"Added: [cyan]{source_path.name}[/cyan]")
+        console.print(f"  [bright_black]Location: {dest_dir}[/bright_black]")
 
     elif source_path.is_dir():
         if not recursive:
-            click.echo(click.style("Error: Use --recursive to copy directories", fg='red'), err=True)
+            print_error("Use --recursive (-r) to copy directories")
             return
 
         dest_subdir = dest_dir / source_path.name
         shutil.copytree(source_path, dest_subdir, dirs_exist_ok=True)
-        click.echo(click.style(f"✓ Copied directory: {source_path.name} → {dest_dir}", fg='green'))
+        print_success(f"Added directory: [cyan]{source_path.name}[/cyan]")
+        console.print(f"  [bright_black]Location: {dest_dir}[/bright_black]")
     else:
-        click.echo(click.style(f"Error: {source} is not a file or directory", fg='red'), err=True)
+        print_error(f"{source} is not a file or directory")
         return
 
-    # Notify if container is running
     try:
         dm = DockerManager(config)
         if dm.is_running():
-            click.echo(click.style("✓ Container is running - new tools are immediately available", fg='green'))
+            console.print("  [green]•[/green] [bright_black]Tool is immediately available[/bright_black]")
     except:
         pass
 
@@ -814,7 +994,8 @@ def add_tool(source, category, recursive):
 @cli.command()
 def version():
     """Show pftp version"""
-    click.echo(f"pftp version {__version__}")
+    # print_logo()
+    print_header("PFTP Version", "Current Version")
 
 
 if __name__ == '__main__':

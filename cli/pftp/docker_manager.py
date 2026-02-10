@@ -36,12 +36,9 @@ class DockerManager:
             True if successful, False otherwise
         """
         try:
-            click.echo(f"Pulling image {image_name}...")
             self.client.images.pull(image_name)
-            click.echo(f"✓ Successfully pulled {image_name}")
             return True
         except DockerException as e:
-            click.echo(f"Error pulling image: {e}", err=True)
             return False
 
     def is_running(self) -> bool:
@@ -66,11 +63,9 @@ class DockerManager:
         try:
             container = self.client.containers.get(CONTAINER_NAME)
             if container.status == 'running':
-                click.echo(f"Container '{CONTAINER_NAME}' is already running")
                 return True
             # Container exists but not running - start it
             container.start()
-            click.echo(f"✓ Started container '{CONTAINER_NAME}'")
             return True
         except NotFound:
             # Create new container
@@ -135,70 +130,17 @@ class DockerManager:
                 environment=environment,
                 network_mode='host',  # Required for IP detection
                 restart_policy=restart_policy,
+                cap_add=['NET_BIND_SERVICE'],  # Allow binding to privileged ports
                 detach=True,
                 stdin_open=True,
                 tty=True
             )
 
-            click.echo(click.style(f"✓ Container created and started: {container.short_id}", fg='green'))
-
-            # Try to get actual IPs
-            try:
-                import subprocess
-                import re
-                result = subprocess.run(['ip', 'addr', 'show'],
-                                      capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    ips = []
-                    current_interface = None
-
-                    for line in result.stdout.split('\n'):
-                        if_match = re.match(r'^\d+:\s+(\S+):', line)
-                        if if_match:
-                            current_interface = if_match.group(1)
-
-                        ip_match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', line)
-                        if ip_match and current_interface:
-                            ip = ip_match.group(1)
-                            if ip != '127.0.0.1':
-                                # Priority system:
-                                # 0 = tun interfaces (VPN/pentest)
-                                # 1 = eth interfaces (ethernet)
-                                # 2 = wlan interfaces (wifi)
-                                # 3 = other interfaces
-                                if current_interface.startswith('tun'):
-                                    priority = 0
-                                elif current_interface.startswith('eth'):
-                                    priority = 1
-                                elif current_interface.startswith('wlan'):
-                                    priority = 2
-                                else:
-                                    priority = 3
-
-                                ips.append((priority, ip, current_interface))
-
-                    ips.sort()
-                    ip_list = [ip for _, ip, _ in ips]
-
-                    if ip_list:
-                        click.echo(click.style(f"✓ Server running at:", fg='green', bold=True))
-                        for ip in ip_list:
-                            click.echo(f"  {click.style(f'http://{ip}:{self.config.port}', fg='cyan', bold=True)}")
-                    else:
-                        click.echo(click.style(f"✓ Server running on http://<your-ip>:{self.config.port}", fg='green'))
-                else:
-                    click.echo(click.style(f"✓ Server running on http://<your-ip>:{self.config.port}", fg='green'))
-            except:
-                click.echo(click.style(f"✓ Server running on http://<your-ip>:{self.config.port}", fg='green'))
-
             return True
 
         except ImageNotFound:
-            click.echo(f"Error: Docker image '{self.config.docker_image}' not found", err=True)
-            click.echo("Run 'pftp install' to pull the image", err=True)
             return False
         except DockerException as e:
-            click.echo(f"Error starting container: {e}", err=True)
             return False
 
     def stop_container(self) -> bool:
@@ -210,13 +152,10 @@ class DockerManager:
         try:
             container = self.client.containers.get(CONTAINER_NAME)
             container.stop(timeout=10)
-            click.echo(f"✓ Container '{CONTAINER_NAME}' stopped")
             return True
         except NotFound:
-            click.echo(f"Container '{CONTAINER_NAME}' not found")
             return False
         except DockerException as e:
-            click.echo(f"Error stopping container: {e}", err=True)
             return False
 
     def remove_container(self) -> bool:
@@ -228,13 +167,11 @@ class DockerManager:
         try:
             container = self.client.containers.get(CONTAINER_NAME)
             container.remove(force=True)
-            click.echo(f"✓ Container '{CONTAINER_NAME}' removed")
             return True
         except NotFound:
             # Already removed
             return True
         except DockerException as e:
-            click.echo(f"Error removing container: {e}", err=True)
             return False
 
     def get_logs(self, follow: bool = True, lines: int = 50):
@@ -291,5 +228,4 @@ class DockerManager:
         except NotFound:
             return {'status': 'not_found'}
         except DockerException as e:
-            click.echo(f"Error getting status: {e}", err=True)
             return None
