@@ -1,5 +1,6 @@
 """Docker container management for PFTP"""
 
+import sys
 import click
 import docker
 from docker.errors import DockerException, ImageNotFound, NotFound
@@ -22,9 +23,22 @@ class DockerManager:
         try:
             self.client = docker.from_env()
         except DockerException as e:
-            click.echo(f"Error: Cannot connect to Docker daemon. Is Docker running?", err=True)
-            click.echo(f"Details: {e}", err=True)
-            raise
+            from .docker_helper import is_docker_installed, get_install_instructions
+
+            if not is_docker_installed():
+                # Docker not installed at all
+                click.echo(click.style("✗ Docker is not installed", fg='red', bold=True), err=True)
+                click.echo()
+                click.echo(get_install_instructions())
+                sys.exit(1)
+            else:
+                # Docker installed but daemon not running
+                click.echo(click.style("✗ Docker daemon is not running", fg='red', bold=True), err=True)
+                click.echo()
+                click.echo("Start Docker with:")
+                click.echo(click.style("  sudo systemctl start docker", fg='cyan'))
+                click.echo("  # or on macOS/Windows: Start Docker Desktop")
+                sys.exit(1)
 
     def pull_image(self, image_name: str) -> bool:
         """Pull Docker image from registry

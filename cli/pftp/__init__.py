@@ -3,5 +3,5 @@
 A CLI tool for managing file transfer servers during penetration testing.
 """
 
-__version__ = "2.0.4"
+__version__ = "2.0.5"
 __author__ = "Ahmad Alawneh"
